@@ -14,6 +14,10 @@ export default function Landing() {
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
 
+  // Team voting config
+  const [teamMode, setTeamMode] = useState(false);
+  const [teamNames, setTeamNames] = useState(['Dev', 'QA']);
+
   const handleCreate = useCallback(() => {
     if (!displayName.trim()) { setError('Please enter your name'); return; }
     if (selectedDeck === 'custom') {
@@ -21,17 +25,24 @@ export default function Landing() {
       if (values.length < 2) { setError('Enter at least 2 custom values'); return; }
       localStorage.setItem('customDeck', customDeckInput);
     }
+    if (teamMode) {
+      const validTeams = teamNames.map((t) => t.trim()).filter(Boolean);
+      if (validTeams.length < 2) { setError('Enter at least 2 team names'); return; }
+    }
     const roomId = generateRoomCode();
     localStorage.setItem('displayName', displayName);
     localStorage.setItem('selectedDeck', selectedDeck);
-    navigate(`/room/${roomId}`);
-  }, [displayName, selectedDeck, customDeckInput, navigate]);
+    const teamsParam = teamMode
+      ? '?teams=' + teamNames.map((t) => t.trim()).filter(Boolean).join(',')
+      : '';
+    navigate(`/room/${roomId}${teamsParam}`);
+  }, [displayName, selectedDeck, customDeckInput, teamMode, teamNames, navigate]);
 
   const handleJoin = useCallback(() => {
     if (!displayName.trim()) { setError('Please enter your name'); return; }
     if (!joinCode.trim()) { setError('Please enter a room code'); return; }
     localStorage.setItem('displayName', displayName);
-    navigate(`/room/${joinCode}`);
+    navigate(`/room/${joinCode.trim()}`);
   }, [displayName, joinCode, navigate]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -59,7 +70,7 @@ export default function Landing() {
           {/* Card fan */}
           <div className="relative flex items-center justify-center mb-8 h-28 sm:h-36">
             {[
-              { rotate: -20, delay: 0, bg: 'from-indigo-500 to-violet-600' },
+              { rotate: -20, delay: 0,   bg: 'from-indigo-500 to-violet-600' },
               { rotate: 0,   delay: 0.1, bg: 'from-violet-500 to-purple-600' },
               { rotate: 20,  delay: 0.2, bg: 'from-purple-500 to-pink-600' },
             ].map((card, i) => (
@@ -99,7 +110,7 @@ export default function Landing() {
         >
           <motion.button
             whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-            onClick={() => { setShowCreateModal(true); setError(''); setDisplayName(''); }}
+            onClick={() => { setShowCreateModal(true); setError(''); setDisplayName(''); setTeamMode(false); setTeamNames(['Dev', 'QA']); }}
             className="px-8 py-3.5 rounded-xl text-white font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 shadow-lg shadow-indigo-500/30 flex items-center justify-center gap-2 transition-all"
           >
             <Zap className="w-5 h-5" />
@@ -163,7 +174,7 @@ export default function Landing() {
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               transition={{ type: 'spring', stiffness: 300, damping: 25 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl border border-slate-200"
+              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto"
             >
               <h2 className="text-2xl font-bold text-slate-900 mb-6">
                 {showCreateModal ? 'Create Session' : 'Join Session'}
@@ -192,7 +203,8 @@ export default function Landing() {
 
               {showCreateModal && (
                 <>
-                  <div className="mb-6">
+                  {/* Deck type */}
+                  <div className="mb-4">
                     <label className="block text-sm font-medium text-slate-700 mb-2">Deck Type</label>
                     <div className="space-y-2">
                       {Object.entries(DECKS).map(([key, deck]) => (
@@ -211,7 +223,6 @@ export default function Landing() {
                             <motion.div
                               initial={{ opacity: 0, height: 0 }}
                               animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
                               className="mt-2 ml-4"
                             >
                               <input
@@ -227,6 +238,75 @@ export default function Landing() {
                       ))}
                     </div>
                   </div>
+
+                  {/* Team voting toggle */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Team Voting</label>
+                    <button
+                      onClick={() => setTeamMode((t) => !t)}
+                      className={`w-full text-left px-4 py-2.5 rounded-lg border transition-all flex items-center justify-between ${
+                        teamMode
+                          ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span className="text-sm font-medium">
+                        {teamMode ? 'Split votes by team — enabled' : 'Split votes by team'}
+                      </span>
+                      {/* Toggle pill */}
+                      <div className={`w-10 h-5 rounded-full transition-colors relative shrink-0 ${teamMode ? 'bg-indigo-500' : 'bg-slate-300'}`}>
+                        <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${teamMode ? 'left-5' : 'left-0.5'}`} />
+                      </div>
+                    </button>
+
+                    <AnimatePresence>
+                      {teamMode && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="mt-3 space-y-2">
+                            {teamNames.map((name, i) => (
+                              <div key={i} className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                  i === 0 ? 'bg-blue-500' : i === 1 ? 'bg-emerald-500' : i === 2 ? 'bg-orange-500' : 'bg-purple-500'
+                                }`} />
+                                <input
+                                  value={name}
+                                  onChange={(e) => {
+                                    const next = [...teamNames];
+                                    next[i] = e.target.value;
+                                    setTeamNames(next);
+                                  }}
+                                  placeholder={`Team ${i + 1} name`}
+                                  className="flex-1 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                                />
+                                {teamNames.length > 2 && (
+                                  <button
+                                    onClick={() => setTeamNames((t) => t.filter((_, j) => j !== i))}
+                                    className="text-slate-400 hover:text-red-500 transition-colors text-sm px-1"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            {teamNames.length < 4 && (
+                              <button
+                                onClick={() => setTeamNames((t) => [...t, ''])}
+                                className="text-xs text-indigo-500 hover:text-indigo-700 font-medium mt-1"
+                              >
+                                + Add another team
+                              </button>
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
                   <motion.button
                     whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
                     onClick={handleCreate}

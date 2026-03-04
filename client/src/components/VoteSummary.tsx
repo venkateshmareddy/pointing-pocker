@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { TrendingDown, TrendingUp, PartyPopper, Target, BarChart3 } from 'lucide-react';
 import { calculateStats } from '@/lib/stats';
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
@@ -8,6 +8,7 @@ import ConfettiEffect from './ConfettiEffect';
 interface VoteSummaryProps {
   participants: Record<string, Participant>;
   isRevealed: boolean;
+  teamGroups?: string[];
 }
 
 function AnimatedNumber({ value, className }: { value: number; className?: string }) {
@@ -26,16 +27,24 @@ function AnimatedNumber({ value, className }: { value: number; className?: strin
   return <span className={className}>{display}</span>;
 }
 
-export default function VoteSummary({ participants, isRevealed }: VoteSummaryProps) {
+export default function VoteSummary({ participants, isRevealed, teamGroups }: VoteSummaryProps) {
+  const [activeTab, setActiveTab] = useState<string>('combined');
+  const hasTeams = teamGroups && teamGroups.length > 0;
+
+  const viewParticipants = useMemo(() => {
+    if (!hasTeams || activeTab === 'combined') return participants;
+    return Object.fromEntries(Object.entries(participants).filter(([, p]) => p.team === activeTab));
+  }, [participants, hasTeams, activeTab]);
+
   if (!isRevealed) return null;
 
   const votes = Object.fromEntries(
-    Object.entries(participants).map(([id, p]) => [id, p.vote]),
+    Object.entries(viewParticipants).map(([id, p]) => [id, p.vote]),
   );
   const stats = calculateStats(votes);
-  if (stats.numericVotes.length === 0) return null;
+  if (stats.numericVotes.length === 0 && !hasTeams) return null;
 
-  const maxCount = Math.max(...Array.from(stats.distribution.values()));
+  const maxCount = stats.distribution.size > 0 ? Math.max(...Array.from(stats.distribution.values())) : 1;
   const distributionEntries = Array.from(stats.distribution.entries()).sort(([a], [b]) => {
     const aNum = typeof a === 'number' ? a : parseFloat(String(a));
     const bNum = typeof b === 'number' ? b : parseFloat(String(b));
@@ -94,6 +103,25 @@ export default function VoteSummary({ participants, isRevealed }: VoteSummaryPro
             >
               {emoji}
             </motion.span>
+          ))}
+        </div>
+      )}
+
+      {/* Team tabs */}
+      {hasTeams && (
+        <div className="flex gap-1 mb-4 p-1 bg-slate-100 rounded-lg">
+          {(['combined', ...teamGroups] as string[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 text-xs font-semibold py-1.5 px-2 rounded-md transition-all ${
+                activeTab === tab
+                  ? 'bg-white shadow-sm text-slate-900'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {tab === 'combined' ? 'Combined' : tab}
+            </button>
           ))}
         </div>
       )}
@@ -180,6 +208,9 @@ export default function VoteSummary({ participants, isRevealed }: VoteSummaryPro
         <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
           Vote Distribution
         </div>
+        {stats.numericVotes.length === 0 ? (
+          <div className="text-sm text-slate-400 text-center py-4">No votes for this team yet</div>
+        ) : (
         <div className="space-y-1.5">
           {distributionEntries.map(([value, count], i) => (
             <div key={String(value)} className="flex items-center gap-3">
@@ -208,6 +239,7 @@ export default function VoteSummary({ participants, isRevealed }: VoteSummaryPro
             </div>
           ))}
         </div>
+        )}
       </div>
     </motion.div>
   );

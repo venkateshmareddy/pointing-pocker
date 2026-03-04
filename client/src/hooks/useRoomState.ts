@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
-import type { ClientMessage, FullRoomState, Participant, DeckType } from '@pointing-poker/shared/types';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import type { FullRoomState, Participant, DeckType } from '@pointing-poker/shared/types';
 import type { UsePartySockeReturn } from './usePartySocket';
 
 export interface RoomStateHook {
@@ -13,19 +13,45 @@ export interface RoomStateHook {
   sendSetStory: (title: string) => void;
   sendStartTimer: (seconds: number) => void;
   sendStopTimer: () => void;
-  sendJoin: (displayName: string, role: 'voter' | 'spectator') => void;
+  sendJoin: (displayName: string, role: 'voter' | 'spectator', team?: string) => void;
   sendSetDeck: (deckType: string, customValues?: string[]) => void;
+  sendSetTeams: (teams: string[]) => void;
   error: string | null;
 }
 
-export function useRoomState(
-  partySocket: UsePartySockeReturn,
-): RoomStateHook {
+function getPersistentId(): string {
+  let id = localStorage.getItem('persistentUserId');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('persistentUserId', id);
+  }
+  return id;
+}
+
+export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
   const [roomState, setRoomState] = useState<FullRoomState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [myId, setMyId] = useState<string | null>(null);
 
   const sendMessage = partySocket.sendMessage;
+  const hasJoinedRef = useRef(false);
+  const prevConnectedRef = useRef(false);
+
+  // Auto-rejoin on reconnect (network blip or browser switch)
+  useEffect(() => {
+    const isReconnect = partySocket.connected && !prevConnectedRef.current && hasJoinedRef.current;
+    prevConnectedRef.current = partySocket.connected;
+
+    if (isReconnect) {
+      const displayName = localStorage.getItem('displayName');
+      const role = (localStorage.getItem('userRole') as 'voter' | 'spectator') || 'voter';
+      const team = localStorage.getItem('userTeam') || undefined;
+      const persistentId = getPersistentId();
+      if (displayName) {
+        sendMessage({ type: 'join', displayName, role, persistentId, team });
+      }
+    }
+  }, [partySocket.connected, sendMessage]);
 
   // Process incoming messages
   useEffect(() => {
@@ -43,10 +69,7 @@ export function useRoomState(
           if (!prev) return null;
           return {
             ...prev,
-            participants: {
-              ...prev.participants,
-              [message.participant.id]: message.participant,
-            },
+            participants: { ...prev.participants, [message.participant.id]: message.participant },
           };
         });
         break;
@@ -55,10 +78,7 @@ export function useRoomState(
         setRoomState((prev) => {
           if (!prev) return null;
           const { [message.id]: _, ...rest } = prev.participants;
-          return {
-            ...prev,
-            participants: rest,
-          };
+          return { ...prev, participants: rest };
         });
         break;
 
@@ -69,10 +89,7 @@ export function useRoomState(
             ...prev,
             participants: {
               ...prev.participants,
-              [message.id]: {
-                ...prev.participants[message.id],
-                hasVoted: true,
-              },
+              [message.id]: { ...prev.participants[message.id], hasVoted: true },
             },
           };
         });
@@ -83,16 +100,10 @@ export function useRoomState(
           if (!prev) return null;
           return {
             ...prev,
-            room: {
-              ...prev.room,
-              revealed: true,
-            },
+            room: { ...prev.room, revealed: true },
             participants: Object.entries(prev.participants).reduce(
-              (acc, [id, participant]) => {
-                acc[id] = {
-                  ...participant,
-                  vote: message.votes[id] ?? participant.vote,
-                };
+              (acc, [id, p]) => {
+                acc[id] = { ...p, vote: message.votes[id] ?? p.vote };
                 return acc;
               },
               {} as Record<string, Participant>,
@@ -106,17 +117,10 @@ export function useRoomState(
           if (!prev) return null;
           return {
             ...prev,
-            room: {
-              ...prev.room,
-              revealed: false,
-            },
+            room: { ...prev.room, revealed: false },
             participants: Object.entries(prev.participants).reduce(
-              (acc, [id, participant]) => {
-                acc[id] = {
-                  ...participant,
-                  vote: null,
-                  hasVoted: false,
-                };
+              (acc, [id, p]) => {
+                acc[id] = { ...p, vote: null, hasVoted: false };
                 return acc;
               },
               {} as Record<string, Participant>,
@@ -128,55 +132,35 @@ export function useRoomState(
       case 'story-updated':
         setRoomState((prev) => {
           if (!prev) return null;
-          return {
-            ...prev,
-            room: {
-              ...prev.room,
-              currentStory: message.title,
-            },
-          };
+          return { ...prev, room: { ...prev.room, currentStory: message.title } };
         });
         break;
 
       case 'deck-updated':
         setRoomState((prev) => {
           if (!prev) return null;
-          return {
-            ...prev,
-            room: {
-              ...prev.room,
-              deckType: message.deckType,
-              customDeck: message.customValues,
-            },
-          };
+          return { ...prev, room: { ...prev.room, deckType: message.deckType, customDeck: message.customValues } };
         });
         break;
 
       case 'timer-started':
         setRoomState((prev) => {
           if (!prev) return null;
-          return {
-            ...prev,
-            room: {
-              ...prev.room,
-              timerSeconds: message.seconds,
-              timerStartedAt: message.startedAt,
-            },
-          };
+          return { ...prev, room: { ...prev.room, timerSeconds: message.seconds, timerStartedAt: message.startedAt } };
         });
         break;
 
       case 'timer-stopped':
         setRoomState((prev) => {
           if (!prev) return null;
-          return {
-            ...prev,
-            room: {
-              ...prev.room,
-              timerSeconds: null,
-              timerStartedAt: null,
-            },
-          };
+          return { ...prev, room: { ...prev.room, timerSeconds: null, timerStartedAt: null } };
+        });
+        break;
+
+      case 'teams-updated':
+        setRoomState((prev) => {
+          if (!prev) return null;
+          return { ...prev, room: { ...prev.room, teamGroups: message.teams.length > 0 ? message.teams : undefined } };
         });
         break;
 
@@ -190,62 +174,34 @@ export function useRoomState(
     }
   }, [partySocket.lastMessage]);
 
-  const sendVote = useCallback(
-    (value: string | number) => {
-      const msg: ClientMessage = { type: 'vote', value };
-      sendMessage(msg);
-    },
-    [sendMessage],
-  );
-
-  const sendReveal = useCallback(() => {
-    const msg: ClientMessage = { type: 'reveal' };
-    sendMessage(msg);
-  }, [sendMessage]);
-
-  const sendClear = useCallback(() => {
-    const msg: ClientMessage = { type: 'clear' };
-    sendMessage(msg);
-  }, [sendMessage]);
-
-  const sendSetStory = useCallback(
-    (title: string) => {
-      const msg: ClientMessage = { type: 'set-story', title };
-      sendMessage(msg);
-    },
-    [sendMessage],
-  );
-
-  const sendStartTimer = useCallback(
-    (seconds: number) => {
-      const msg: ClientMessage = { type: 'start-timer', seconds };
-      sendMessage(msg);
-    },
-    [sendMessage],
-  );
-
-  const sendStopTimer = useCallback(() => {
-    const msg: ClientMessage = { type: 'stop-timer' };
-    sendMessage(msg);
-  }, [sendMessage]);
+  const sendVote = useCallback((value: string | number) => { sendMessage({ type: 'vote', value }); }, [sendMessage]);
+  const sendReveal = useCallback(() => { sendMessage({ type: 'reveal' }); }, [sendMessage]);
+  const sendClear = useCallback(() => { sendMessage({ type: 'clear' }); }, [sendMessage]);
+  const sendSetStory = useCallback((title: string) => { sendMessage({ type: 'set-story', title }); }, [sendMessage]);
+  const sendStartTimer = useCallback((seconds: number) => { sendMessage({ type: 'start-timer', seconds }); }, [sendMessage]);
+  const sendStopTimer = useCallback(() => { sendMessage({ type: 'stop-timer' }); }, [sendMessage]);
 
   const sendJoin = useCallback(
-    (displayName: string, role: 'voter' | 'spectator') => {
-      const msg: ClientMessage = { type: 'join', displayName, role };
-      sendMessage(msg);
+    (displayName: string, role: 'voter' | 'spectator', team?: string) => {
+      const persistentId = getPersistentId();
+      localStorage.setItem('userRole', role);
+      if (team) localStorage.setItem('userTeam', team);
+      else localStorage.removeItem('userTeam');
+      hasJoinedRef.current = true;
+      sendMessage({ type: 'join', displayName, role, persistentId, team });
     },
     [sendMessage],
   );
 
   const sendSetDeck = useCallback(
     (deckType: string, customValues?: string[]) => {
-      const msg: ClientMessage = {
-        type: 'set-deck',
-        deckType: deckType as DeckType,
-        ...(customValues ? { customValues } : {}),
-      };
-      sendMessage(msg);
+      sendMessage({ type: 'set-deck', deckType: deckType as DeckType, ...(customValues ? { customValues } : {}) });
     },
+    [sendMessage],
+  );
+
+  const sendSetTeams = useCallback(
+    (teams: string[]) => { sendMessage({ type: 'set-teams', teams }); },
     [sendMessage],
   );
 
@@ -253,18 +209,9 @@ export function useRoomState(
   const isRevealed = roomState?.room.revealed ?? false;
 
   return {
-    roomState,
-    participants,
-    myId,
-    isRevealed,
-    sendVote,
-    sendReveal,
-    sendClear,
-    sendSetStory,
-    sendStartTimer,
-    sendStopTimer,
-    sendJoin,
-    sendSetDeck,
+    roomState, participants, myId, isRevealed,
+    sendVote, sendReveal, sendClear, sendSetStory,
+    sendStartTimer, sendStopTimer, sendJoin, sendSetDeck, sendSetTeams,
     error,
   };
 }

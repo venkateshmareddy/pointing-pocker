@@ -6,7 +6,6 @@ import type {
   Participant,
   FullRoomState,
   DeckType,
-  RoomSettings,
 } from "@pointing-poker/shared/types";
 
 export default class PointingPokerServer implements Party.Server {
@@ -16,8 +15,14 @@ export default class PointingPokerServer implements Party.Server {
   private roomState: RoomState;
   private timerInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Maps connectionId (WebSocket) ↔ participantId (stable persistentId or fallback connectionId)
+  private connectionMap: Map<string, string> = new Map(); // connectionId → participantId
+  private reverseConnectionMap: Map<string, string> = new Map(); // participantId → connectionId
+
+  // Participants who disconnected — kept for reconnect restoration
+  private previousParticipants: Map<string, Participant> = new Map();
+
   constructor(readonly room: Party.Room) {
-    // Initialize room state with defaults
     this.roomState = {
       sessionId: room.id,
       createdAt: new Date().toISOString(),
@@ -35,158 +40,404 @@ export default class PointingPokerServer implements Party.Server {
     };
   }
 
-  async onConnect(connection: Party.Connection) {
-    const userId = connection.id;
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
-    // Send current state to new connection, including their connection ID
+  private getParticipantId(connectionId: string): string {
+    return this.connectionMap.get(connectionId) ?? connectionId;
+  }
+
+  private getConnectionForParticipant(participantId: string): Party.Connection | null {
+    const connectionId = this.reverseConnectionMap.get(participantId);
+    if (!connectionId) return null;
+    return this.room.getConnection(connectionId) ?? null;
+  }
+
+  private sendError(connectionId: string, message: string) {
+    const connection = this.room.getConnection(connectionId);
+    if (connection) {
+      const msg: ServerMessage = { type: "error", message };
+      connection.send(JSON.stringify(msg));
+    }
+  }
+
+  // ── HTTP API ───────────────────────────────────────────────────────────────
+
+  async onRequest(request: Party.Request): Promise<Response> {
+    // Only allow GET
+    if (request.method !== "GET") {
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    const voters = Array.from(this.participants.values()).filter(
+      (p) => p.role !== "spectator"
+    );
+    const spectators = Array.from(this.participants.values()).filter(
+      (p) => p.role === "spectator"
+    );
+
+    // Compute basic stats from numeric votes
+    const numericVotes = voters
+      .filter((p) => p.vote !== null && !isNaN(parseFloat(String(p.vote))))
+      .map((p) => parseFloat(String(p.vote)));
+
+    let stats: Record<string, number | boolean | null> = {
+      average: null,
+      min: null,
+      max: null,
+      consensus: false,
+    };
+
+    if (numericVotes.length > 0) {
+      const avg = numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length;
+      stats = {
+        average: Math.round(avg * 100) / 100,
+        min: Math.min(...numericVotes),
+        max: Math.max(...numericVotes),
+        consensus: new Set(numericVotes).size === 1,
+      };
+    }
+
+    const payload = {
+      roomId: this.room.id,
+      revealed: this.roomState.revealed,
+      currentStory: this.roomState.currentStory,
+      deckType: this.roomState.deckType,
+      voters: voters.map((p) => ({
+        participantId: p.id,
+        displayName: p.displayName,
+        role: p.role,
+        hasVoted: p.hasVoted,
+        // Only expose vote value when revealed
+        vote: this.roomState.revealed ? p.vote : p.hasVoted ? "hidden" : null,
+      })),
+      spectators: spectators.map((p) => ({
+        participantId: p.id,
+        displayName: p.displayName,
+      })),
+      stats: this.roomState.revealed ? stats : null,
+    };
+
+    return new Response(JSON.stringify(payload, null, 2), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }
+
+  // ── Connection lifecycle ───────────────────────────────────────────────────
+
+  async onConnect(connection: Party.Connection) {
     const state = this.getFullState();
-    const message: ServerMessage = { type: "state", state, yourId: userId };
-    connection.send(JSON.stringify(message));
+    const msg: ServerMessage = { type: "state", state, yourId: connection.id };
+    connection.send(JSON.stringify(msg));
   }
 
   async onMessage(message: string, sender: Party.Connection) {
     try {
       const data = JSON.parse(message) as ClientMessage;
-      const userId = sender.id;
+      const connectionId = sender.id;
 
       switch (data.type) {
         case "join":
-          this.handleJoin(userId, data.displayName, data.role, sender);
+          this.handleJoin(connectionId, data.persistentId, data.displayName, data.role, sender, data.team);
           break;
         case "vote":
-          this.handleVote(userId, data.value);
+          this.handleVote(connectionId, data.value);
           break;
         case "reveal":
-          this.handleReveal(userId);
+          this.handleReveal(connectionId);
           break;
         case "clear":
-          this.handleClear(userId);
+          this.handleClear(connectionId);
           break;
         case "set-story":
-          this.handleSetStory(userId, data.title);
+          this.handleSetStory(connectionId, data.title);
           break;
         case "set-deck":
-          this.handleSetDeck(userId, data.deckType, data.customValues);
+          this.handleSetDeck(connectionId, data.deckType, data.customValues);
           break;
         case "start-timer":
-          this.handleStartTimer(userId, data.seconds);
+          this.handleStartTimer(connectionId, data.seconds);
           break;
         case "stop-timer":
-          this.handleStopTimer(userId);
+          this.handleStopTimer(connectionId);
+          break;
+        case "set-teams":
+          this.handleSetTeams(connectionId, data.teams);
           break;
         case "kick":
-          this.handleKick(userId, data.participantId);
+          this.handleKick(connectionId, data.participantId);
           break;
       }
-    } catch (error) {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Failed to process message",
-      };
-      sender.send(JSON.stringify(errorMessage));
+    } catch {
+      this.sendError(sender.id, "Failed to process message");
     }
   }
 
   async onClose(connection: Party.Connection) {
-    const userId = connection.id;
-    const participant = this.participants.get(userId);
+    const connectionId = connection.id;
+    const participantId = this.getParticipantId(connectionId);
 
-    if (participant) {
-      this.participants.delete(userId);
+    this.connectionMap.delete(connectionId);
+    this.reverseConnectionMap.delete(participantId);
 
-      // If moderator leaves, assign to the next person
-      if (this.roomState.moderatorId === userId) {
-        const remainingParticipants = Array.from(this.participants.values());
-        if (remainingParticipants.length > 0) {
-          const newModerator = remainingParticipants[0];
-          this.roomState.moderatorId = newModerator.id;
-          newModerator.role = "moderator";
-        } else {
-          this.roomState.moderatorId = "";
-        }
+    const participant = this.participants.get(participantId);
+    if (!participant) return;
+
+    this.participants.delete(participantId);
+
+    // Save for reconnect (e.g. browser switch / network blip)
+    this.previousParticipants.set(participantId, { ...participant });
+
+    // If moderator disconnected, temporarily promote someone else
+    if (this.roomState.moderatorId === participantId) {
+      const remaining = Array.from(this.participants.values());
+      if (remaining.length > 0) {
+        const tempMod = remaining[0];
+        tempMod.role = "moderator";
+        this.roomState.moderatorId = tempMod.id;
       }
-
-      // Broadcast participant left
-      const leftMessage: ServerMessage = { type: "participant-left", id: userId };
-      this.room.broadcast(JSON.stringify(leftMessage));
+      // If no one remains, keep moderatorId — original will reclaim on reconnect
     }
+
+    const leftMsg: ServerMessage = { type: "participant-left", id: participantId };
+    this.room.broadcast(JSON.stringify(leftMsg));
   }
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
 
   private handleJoin(
-    userId: string,
+    connectionId: string,
+    persistentId: string | undefined,
     displayName: string,
     role: "voter" | "spectator",
-    connection: Party.Connection
+    connection: Party.Connection,
+    team?: string
   ) {
-    // First person to join becomes moderator
-    if (this.participants.size === 0) {
-      this.roomState.moderatorId = userId;
+    const participantId = persistentId || connectionId;
+
+    // Update connection ↔ participant maps
+    this.connectionMap.set(connectionId, participantId);
+    this.reverseConnectionMap.set(participantId, connectionId);
+
+    // Already active in another tab/browser — just resync state
+    const existingActive = this.participants.get(participantId);
+    if (existingActive) {
+      const state = this.getFullState();
+      const msg: ServerMessage = { type: "state", state, yourId: participantId };
+      connection.send(JSON.stringify(msg));
+      return;
     }
 
-    const participant: Participant = {
-      id: userId,
-      displayName,
-      role: this.roomState.moderatorId === userId ? "moderator" : role,
-      vote: null,
-      hasVoted: false,
-      joinedAt: new Date().toISOString(),
-    };
+    // Reconnecting after disconnect — restore previous session
+    const prev = this.previousParticipants.get(participantId);
+    let participant: Participant;
 
-    this.participants.set(userId, participant);
+    if (prev) {
+      this.previousParticipants.delete(participantId);
+      participant = { ...prev };
 
-    // Broadcast new participant
-    const joinedMessage: ServerMessage = {
-      type: "participant-joined",
-      participant,
-    };
-    this.room.broadcast(JSON.stringify(joinedMessage));
+      // Original moderator reconnecting — restore role even if someone else was promoted
+      if (prev.role === "moderator") {
+        const currentMod = this.participants.get(this.roomState.moderatorId);
+        if (currentMod && currentMod.id !== participantId) {
+          currentMod.role = "voter";
+        }
+        this.roomState.moderatorId = participantId;
+        participant.role = "moderator";
+      }
+    } else {
+      // New join
+      if (this.participants.size === 0) {
+        this.roomState.moderatorId = participantId;
+      }
+      participant = {
+        id: participantId,
+        displayName,
+        role: this.roomState.moderatorId === participantId ? "moderator" : role,
+        vote: null,
+        hasVoted: false,
+        joinedAt: new Date().toISOString(),
+        team,
+      };
+    }
 
-    // Send full state to the joining participant
+    this.participants.set(participantId, participant);
+
+    const joinedMsg: ServerMessage = { type: "participant-joined", participant };
+    this.room.broadcast(JSON.stringify(joinedMsg));
+
     const state = this.getFullState();
-    const stateMessage: ServerMessage = { type: "state", state, yourId: userId };
-    connection.send(JSON.stringify(stateMessage));
+    const stateMsg: ServerMessage = { type: "state", state, yourId: participantId };
+    connection.send(JSON.stringify(stateMsg));
   }
 
-  private handleVote(userId: string, value: string | number) {
-    const participant = this.participants.get(userId);
+  private handleVote(connectionId: string, value: string | number) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
     if (!participant) return;
 
     participant.vote = value;
     participant.hasVoted = true;
 
-    // Broadcast vote cast (without the value to keep votes hidden)
-    const voteMessage: ServerMessage = { type: "vote-cast", id: userId };
-    this.room.broadcast(JSON.stringify(voteMessage));
+    const voteMsg: ServerMessage = { type: "vote-cast", id: participantId };
+    this.room.broadcast(JSON.stringify(voteMsg));
 
-    // Check if auto-reveal should happen
     if (this.roomState.settings.autoRevealWhenAllVoted) {
       const allVoters = Array.from(this.participants.values()).filter(
         (p) => p.role === "voter"
       );
       const allHaveVoted = allVoters.every((p) => p.hasVoted);
-
       if (allHaveVoted && allVoters.length > 0) {
         this.revealVotes();
       }
     }
   }
 
-  private handleReveal(userId: string) {
-    const participant = this.participants.get(userId);
+  private handleReveal(connectionId: string) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
     if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can reveal votes",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
+      this.sendError(connectionId, "Only moderator can reveal votes");
+      return;
+    }
+    this.revealVotes();
+  }
+
+  private handleClear(connectionId: string) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can clear votes");
       return;
     }
 
-    this.revealVotes();
+    this.stopTimerInternal();
+
+    for (const p of this.participants.values()) {
+      p.vote = null;
+      p.hasVoted = false;
+    }
+    this.roomState.revealed = false;
+
+    const clearMsg: ServerMessage = { type: "votes-cleared" };
+    this.room.broadcast(JSON.stringify(clearMsg));
   }
+
+  private handleSetStory(connectionId: string, title: string) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can set story");
+      return;
+    }
+
+    this.roomState.currentStory = title;
+    for (const p of this.participants.values()) {
+      p.vote = null;
+      p.hasVoted = false;
+    }
+    this.roomState.revealed = false;
+
+    const storyMsg: ServerMessage = { type: "story-updated", title };
+    this.room.broadcast(JSON.stringify(storyMsg));
+  }
+
+  private handleSetDeck(
+    connectionId: string,
+    deckType: DeckType,
+    customValues?: string[]
+  ) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can set deck");
+      return;
+    }
+
+    this.roomState.deckType = deckType;
+    if (customValues) {
+      this.roomState.customDeck = customValues;
+    }
+
+    const deckMsg: ServerMessage = { type: "deck-updated", deckType, customValues };
+    this.room.broadcast(JSON.stringify(deckMsg));
+  }
+
+  private handleStartTimer(connectionId: string, seconds: number) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can start timer");
+      return;
+    }
+
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+    }
+
+    const startedAt = new Date().toISOString();
+    this.roomState.timerSeconds = seconds;
+    this.roomState.timerStartedAt = startedAt;
+
+    const timerMsg: ServerMessage = { type: "timer-started", seconds, startedAt };
+    this.room.broadcast(JSON.stringify(timerMsg));
+
+    this.timerInterval = setInterval(() => {
+      if (this.roomState.timerSeconds !== null) {
+        this.roomState.timerSeconds--;
+        if (this.roomState.timerSeconds <= 0) {
+          this.stopTimerInternal();
+        }
+      }
+    }, 1000);
+  }
+
+  private handleStopTimer(connectionId: string) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can stop timer");
+      return;
+    }
+    this.stopTimerInternal();
+  }
+
+  private handleSetTeams(connectionId: string, teams: string[]) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can configure teams");
+      return;
+    }
+    this.roomState.teamGroups = teams.length > 0 ? teams : undefined;
+    const msg: ServerMessage = { type: "teams-updated", teams };
+    this.room.broadcast(JSON.stringify(msg));
+  }
+
+  private handleKick(connectionId: string, targetParticipantId: string) {
+    const participantId = this.getParticipantId(connectionId);
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.role !== "moderator") {
+      this.sendError(connectionId, "Only moderator can kick participants");
+      return;
+    }
+
+    // Find their current connection
+    const targetConnection = this.getConnectionForParticipant(targetParticipantId);
+    if (targetConnection) {
+      const kickMsg: ServerMessage = { type: "kicked" };
+      targetConnection.send(JSON.stringify(kickMsg));
+      targetConnection.close();
+    }
+
+    // Also prevent reconnect
+    this.previousParticipants.delete(targetParticipantId);
+  }
+
+  // ── Internals ──────────────────────────────────────────────────────────────
 
   private stopTimerInternal() {
     if (this.timerInterval) {
@@ -196,8 +447,8 @@ export default class PointingPokerServer implements Party.Server {
     if (this.roomState.timerSeconds !== null || this.roomState.timerStartedAt !== null) {
       this.roomState.timerSeconds = null;
       this.roomState.timerStartedAt = null;
-      const stopMessage: ServerMessage = { type: "timer-stopped" };
-      this.room.broadcast(JSON.stringify(stopMessage));
+      const stopMsg: ServerMessage = { type: "timer-stopped" };
+      this.room.broadcast(JSON.stringify(stopMsg));
     }
   }
 
@@ -210,187 +461,8 @@ export default class PointingPokerServer implements Party.Server {
       votes[id] = participant.vote;
     }
 
-    const revealMessage: ServerMessage = { type: "votes-revealed", votes };
-    this.room.broadcast(JSON.stringify(revealMessage));
-  }
-
-  private handleClear(userId: string) {
-    const participant = this.participants.get(userId);
-    if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can clear votes",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
-      return;
-    }
-
-    this.stopTimerInternal();
-
-    // Clear all votes
-    for (const p of this.participants.values()) {
-      p.vote = null;
-      p.hasVoted = false;
-    }
-
-    this.roomState.revealed = false;
-
-    const clearMessage: ServerMessage = { type: "votes-cleared" };
-    this.room.broadcast(JSON.stringify(clearMessage));
-  }
-
-  private handleSetStory(userId: string, title: string) {
-    const participant = this.participants.get(userId);
-    if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can set story",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
-      return;
-    }
-
-    this.roomState.currentStory = title;
-
-    // Clear votes when story changes
-    for (const p of this.participants.values()) {
-      p.vote = null;
-      p.hasVoted = false;
-    }
-    this.roomState.revealed = false;
-
-    const storyMessage: ServerMessage = {
-      type: "story-updated",
-      title,
-    };
-    this.room.broadcast(JSON.stringify(storyMessage));
-  }
-
-  private handleSetDeck(
-    userId: string,
-    deckType: DeckType,
-    customValues?: string[]
-  ) {
-    const participant = this.participants.get(userId);
-    if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can set deck",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
-      return;
-    }
-
-    this.roomState.deckType = deckType;
-    if (customValues) {
-      this.roomState.customDeck = customValues;
-    }
-
-    const deckMessage: ServerMessage = {
-      type: "deck-updated",
-      deckType,
-      customValues,
-    };
-    this.room.broadcast(JSON.stringify(deckMessage));
-  }
-
-  private handleStartTimer(userId: string, seconds: number) {
-    const participant = this.participants.get(userId);
-    if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can start timer",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
-      return;
-    }
-
-    // Stop existing timer if running
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-    }
-
-    const startedAt = new Date().toISOString();
-    this.roomState.timerSeconds = seconds;
-    this.roomState.timerStartedAt = startedAt;
-
-    const timerMessage: ServerMessage = {
-      type: "timer-started",
-      seconds,
-      startedAt,
-    };
-    this.room.broadcast(JSON.stringify(timerMessage));
-
-    // Setup interval to decrement timer and auto-stop when done
-    this.timerInterval = setInterval(() => {
-      if (this.roomState.timerSeconds !== null) {
-        this.roomState.timerSeconds--;
-
-        if (this.roomState.timerSeconds <= 0) {
-          this.handleStopTimer(userId);
-        }
-      }
-    }, 1000);
-  }
-
-  private handleStopTimer(userId: string) {
-    const participant = this.participants.get(userId);
-    if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can stop timer",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
-      return;
-    }
-
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = null;
-    }
-
-    this.roomState.timerSeconds = null;
-    this.roomState.timerStartedAt = null;
-
-    const stopMessage: ServerMessage = { type: "timer-stopped" };
-    this.room.broadcast(JSON.stringify(stopMessage));
-  }
-
-  private handleKick(userId: string, participantId: string) {
-    const participant = this.participants.get(userId);
-    if (!participant || participant.role !== "moderator") {
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Only moderator can kick participants",
-      };
-      const connection = this.room.getConnection(userId);
-      if (connection) {
-        connection.send(JSON.stringify(errorMessage));
-      }
-      return;
-    }
-
-    const connection = this.room.getConnection(participantId);
-    if (connection) {
-      const kickMessage: ServerMessage = { type: "kicked" };
-      connection.send(JSON.stringify(kickMessage));
-      connection.close();
-    }
+    const revealMsg: ServerMessage = { type: "votes-revealed", votes };
+    this.room.broadcast(JSON.stringify(revealMsg));
   }
 
   private getFullState(): FullRoomState {
@@ -398,11 +470,6 @@ export default class PointingPokerServer implements Party.Server {
     for (const [id, participant] of this.participants) {
       participants[id] = participant;
     }
-
-    return {
-      room: this.roomState,
-      participants,
-    };
+    return { room: this.roomState, participants };
   }
 }
-

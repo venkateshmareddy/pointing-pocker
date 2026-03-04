@@ -17,6 +17,7 @@ export interface RoomState {
   revealed: boolean;
   timerSeconds: number | null;
   timerStartedAt: string | null;
+  teamGroups?: string[];
   settings: RoomSettings;
 }
 
@@ -27,6 +28,7 @@ export interface Participant {
   vote: string | number | null;
   hasVoted: boolean;
   joinedAt: string;
+  team?: string;
 }
 
 export interface FullRoomState {
@@ -36,7 +38,8 @@ export interface FullRoomState {
 
 // Client → Server messages
 export type ClientMessage =
-  | { type: "join"; displayName: string; role: "voter" | "spectator" }
+  | { type: "join"; displayName: string; role: "voter" | "spectator"; persistentId?: string; team?: string }
+  | { type: "set-teams"; teams: string[] }
   | { type: "vote"; value: string | number }
   | { type: "reveal" }
   | { type: "clear" }
@@ -58,5 +61,6 @@ export type ServerMessage =
   | { type: "deck-updated"; deckType: DeckType; customValues?: string[] }
   | { type: "timer-started"; seconds: number; startedAt: string }
   | { type: "timer-stopped" }
+  | { type: "teams-updated"; teams: string[] }
   | { type: "kicked" }
   | { type: "error"; message: string };

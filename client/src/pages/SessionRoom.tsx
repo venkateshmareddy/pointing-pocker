@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LogOut, Volume2, VolumeX } from 'lucide-react';
@@ -20,7 +20,13 @@ import RoundHistory from '@/components/RoundHistory';
 export default function SessionRoom() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const sounds = useSounds();
+
+  const teamsFromUrl = (() => {
+    const t = searchParams.get('teams');
+    return t ? t.split(',').filter(Boolean) : [];
+  })();
 
   if (!roomId) {
     return (
@@ -39,6 +45,8 @@ export default function SessionRoom() {
   const [joinRole, setJoinRole] = useState<'voter' | 'spectator'>('voter');
   const [joinError, setJoinError] = useState('');
   const [showRevealFlash, setShowRevealFlash] = useState(false);
+  const [joinTeam, setJoinTeam] = useState('');
+  const hasSetTeamsRef = useRef(false);
 
   const prevRevealedRef = useRef(false);
   const prevParticipantCountRef = useRef(0);
@@ -76,12 +84,22 @@ export default function SessionRoom() {
     prevParticipantCountRef.current = currentParticipantCount;
   }, [roomState.roomState, sounds, saveRound]);
 
+  // Auto-send teams config when moderator first joins
+  useEffect(() => {
+    if (hasSetTeamsRef.current || !roomState.roomState || !roomState.myId || teamsFromUrl.length === 0) return;
+    if (roomState.myId === roomState.roomState.room.moderatorId) {
+      hasSetTeamsRef.current = true;
+      roomState.sendSetTeams(teamsFromUrl);
+    }
+  }, [roomState.roomState, roomState.myId, teamsFromUrl, roomState.sendSetTeams]);
+
   const handleJoin = useCallback(() => {
     if (!joinDisplayName.trim()) { setJoinError('Please enter your name'); return; }
+    if (teamsFromUrl.length > 0 && !joinTeam) { setJoinError('Please select your team'); return; }
     localStorage.setItem('displayName', joinDisplayName);
-    roomState.sendJoin(joinDisplayName, joinRole);
+    roomState.sendJoin(joinDisplayName, joinRole, joinTeam || undefined);
     setShowJoinForm(false);
-  }, [joinDisplayName, joinRole, roomState]);
+  }, [joinDisplayName, joinRole, joinTeam, teamsFromUrl, roomState]);
 
   const handleVote = useCallback(
     (value: string | number) => { sounds.playCardSelect(); roomState.sendVote(value); },
@@ -135,6 +153,25 @@ export default function SessionRoom() {
               ))}
             </div>
           </div>
+
+          {teamsFromUrl.length > 0 && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-700 mb-2">Your Team</label>
+              <div className="flex gap-2 flex-wrap">
+                {teamsFromUrl.map((team) => (
+                  <button key={team} onClick={() => setJoinTeam(team)}
+                    className={`px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                      joinTeam === team
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {team}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
             onClick={handleJoin}
@@ -235,7 +272,7 @@ export default function SessionRoom() {
                     exit={{ opacity: 0, y: -20, scale: 0.97 }}
                     transition={{ duration: 0.35, ease: 'easeInOut' }}
                   >
-                    <VoteSummary participants={roomState.roomState.participants} isRevealed={currentRoom.revealed} />
+                    <VoteSummary participants={roomState.roomState.participants} isRevealed={currentRoom.revealed} teamGroups={currentRoom.teamGroups} />
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -244,7 +281,7 @@ export default function SessionRoom() {
             {/* Right sidebar */}
             <div className="space-y-4">
               <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
-                <ParticipantList participants={roomState.participants} isRevealed={currentRoom.revealed} />
+                <ParticipantList participants={roomState.participants} isRevealed={currentRoom.revealed} teamGroups={currentRoom.teamGroups} />
               </motion.div>
               <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 }}>
                 <SessionControls
