@@ -198,6 +198,8 @@ export default class PointingPokerServer implements Party.Server {
         const tempMod = remaining[0];
         tempMod.role = "moderator";
         this.roomState.moderatorId = tempMod.id;
+        const modChangedMsg: ServerMessage = { type: "moderator-changed", newModeratorId: tempMod.id };
+        this.room.broadcast(JSON.stringify(modChangedMsg));
       }
       // If no one remains, keep moderatorId — original will reclaim on reconnect
     }
@@ -268,6 +270,12 @@ export default class PointingPokerServer implements Party.Server {
 
     const joinedMsg: ServerMessage = { type: "participant-joined", participant };
     this.room.broadcast(JSON.stringify(joinedMsg));
+
+    // Broadcast moderator change so all clients update room.moderatorId and roles
+    if (participant.role === "moderator") {
+      const modChangedMsg: ServerMessage = { type: "moderator-changed", newModeratorId: participantId };
+      this.room.broadcast(JSON.stringify(modChangedMsg));
+    }
 
     const state = this.getFullState();
     const stateMsg: ServerMessage = { type: "state", state, yourId: participantId };

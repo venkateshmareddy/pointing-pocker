@@ -62,5 +62,6 @@ export type ServerMessage =
   | { type: "timer-started"; seconds: number; startedAt: string }
   | { type: "timer-stopped" }
   | { type: "teams-updated"; teams: string[] }
+  | { type: "moderator-changed"; newModeratorId: string }
   | { type: "kicked" }
   | { type: "error"; message: string };

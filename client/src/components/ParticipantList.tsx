@@ -134,25 +134,34 @@ export default function ParticipantList({ participants, isRevealed, teamGroups }
       <div className="space-y-0.5">
         <AnimatePresence>
           {hasTeams ? (
-            teamGroups.map((team, teamIdx) => {
-              const teamColor = TEAM_COLORS[teamIdx % TEAM_COLORS.length];
-              const teamVoters = voters.filter((p) => p.team === team);
-              if (teamVoters.length === 0) return null;
-              return (
-                <div key={team} className="mb-3">
-                  <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md mb-1 border ${teamColor.badge}`}>
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${teamColor.dot}`} />
-                    <span className={`text-[11px] font-bold uppercase tracking-wider ${teamColor.label}`}>{team}</span>
-                    <span className={`ml-auto text-[10px] font-medium ${teamColor.label} opacity-70`}>
-                      {teamVoters.filter((p) => p.hasVoted).length}/{teamVoters.length}
-                    </span>
+            <>
+              {teamGroups.map((team, teamIdx) => {
+                const teamColor = TEAM_COLORS[teamIdx % TEAM_COLORS.length];
+                const teamVoters = voters.filter((p) => p.team === team);
+                return (
+                  <div key={team} className="mb-3">
+                    <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md mb-1 border ${teamColor.badge}`}>
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${teamColor.dot}`} />
+                      <span className={`text-[11px] font-bold uppercase tracking-wider ${teamColor.label}`}>{team}</span>
+                      <span className={`ml-auto text-[10px] font-medium ${teamColor.label} opacity-70`}>
+                        {teamVoters.filter((p) => p.hasVoted).length}/{teamVoters.length}
+                      </span>
+                    </div>
+                    {teamVoters.length === 0 ? (
+                      <div className="px-2.5 py-1.5 text-xs text-slate-400 italic">No members yet</div>
+                    ) : (
+                      teamVoters.map((participant, idx) => (
+                        <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} />
+                      ))
+                    )}
                   </div>
-                  {teamVoters.map((participant, idx) => (
-                    <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} />
-                  ))}
-                </div>
-              );
-            })
+                );
+              })}
+              {/* Participants without a team assignment */}
+              {voters.filter((p) => !p.team || !teamGroups.includes(p.team)).map((participant, idx) => (
+                <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} />
+              ))}
+            </>
           ) : (
           voters.map((participant, idx) => (
             <motion.div

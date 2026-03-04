@@ -84,6 +84,12 @@ export default function SessionRoom() {
     prevParticipantCountRef.current = currentParticipantCount;
   }, [roomState.roomState, sounds, saveRound]);
 
+  // Effective teams: prefer server state (available to all participants), fall back to URL param (moderator before joining)
+  const effectiveTeams =
+    roomState.roomState?.room.teamGroups?.length
+      ? roomState.roomState.room.teamGroups
+      : teamsFromUrl;
+
   // Auto-send teams config when moderator first joins
   useEffect(() => {
     if (hasSetTeamsRef.current || !roomState.roomState || !roomState.myId || teamsFromUrl.length === 0) return;
@@ -95,11 +101,11 @@ export default function SessionRoom() {
 
   const handleJoin = useCallback(() => {
     if (!joinDisplayName.trim()) { setJoinError('Please enter your name'); return; }
-    if (teamsFromUrl.length > 0 && !joinTeam) { setJoinError('Please select your team'); return; }
+    if (effectiveTeams.length > 0 && !joinTeam) { setJoinError('Please select your team'); return; }
     localStorage.setItem('displayName', joinDisplayName);
     roomState.sendJoin(joinDisplayName, joinRole, joinTeam || undefined);
     setShowJoinForm(false);
-  }, [joinDisplayName, joinRole, joinTeam, teamsFromUrl, roomState]);
+  }, [joinDisplayName, joinRole, joinTeam, effectiveTeams, roomState]);
 
   const handleVote = useCallback(
     (value: string | number) => { sounds.playCardSelect(); roomState.sendVote(value); },
@@ -154,11 +160,11 @@ export default function SessionRoom() {
             </div>
           </div>
 
-          {teamsFromUrl.length > 0 && (
+          {effectiveTeams.length > 0 && (
             <div className="mb-6">
               <label className="block text-sm font-medium text-slate-700 mb-2">Your Team</label>
               <div className="flex gap-2 flex-wrap">
-                {teamsFromUrl.map((team) => (
+                {effectiveTeams.map((team) => (
                   <button key={team} onClick={() => setJoinTeam(team)}
                     className={`px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${
                       joinTeam === team

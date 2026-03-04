@@ -164,6 +164,27 @@ export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
         });
         break;
 
+      case 'moderator-changed':
+        setRoomState((prev) => {
+          if (!prev) return null;
+          const participants = { ...prev.participants };
+          const oldModId = prev.room.moderatorId;
+          // Demote old moderator back to voter if still present
+          if (participants[oldModId] && oldModId !== message.newModeratorId) {
+            participants[oldModId] = { ...participants[oldModId], role: 'voter' };
+          }
+          // Promote new moderator
+          if (participants[message.newModeratorId]) {
+            participants[message.newModeratorId] = { ...participants[message.newModeratorId], role: 'moderator' };
+          }
+          return {
+            ...prev,
+            room: { ...prev.room, moderatorId: message.newModeratorId },
+            participants,
+          };
+        });
+        break;
+
       case 'kicked':
         setError('You have been kicked from the session');
         break;
