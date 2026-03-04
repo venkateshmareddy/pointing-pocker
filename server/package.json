@@ -1,0 +1,16 @@
+{
+  "name": "pointing-poker-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx partykit dev --port 1999",
+    "deploy": "npx partykit deploy"
+  },
+  "dependencies": {
+    "@pointing-poker/shared": "*",
+    "partykit": "^0.0.108"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
