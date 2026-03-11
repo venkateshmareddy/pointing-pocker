@@ -72,6 +72,15 @@ export default function Card({ value, isSelected, isRevealed, isSpecial, onClick
       <div className={`absolute bottom-2 left-0 right-0 flex justify-center ${text} opacity-25`}>
         <User className="w-2.5 h-2.5" />
       </div>
+
+      {/* "Your vote" badge */}
+      {isSelected && (
+        <div className="absolute -bottom-5 left-0 right-0 flex justify-center">
+          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-full px-2 py-0.5 whitespace-nowrap shadow-sm">
+            Your vote
+          </span>
+        </div>
+      )}
     </motion.button>
   );
 }

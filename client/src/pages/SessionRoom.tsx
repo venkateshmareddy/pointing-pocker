@@ -293,6 +293,7 @@ export default function SessionRoom() {
                 <SessionControls
                   roomId={roomId} isRevealed={currentRoom.revealed} hasVotes={hasVotes}
                   currentDeckType={currentRoom.deckType} isModeratorOrVoter={isModeratorOrVoter}
+                  isModerator={isModerator}
                   onReveal={handleReveal} onClear={handleClear} onSetDeck={roomState.sendSetDeck}
                 />
               </motion.div>

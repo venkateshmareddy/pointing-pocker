@@ -9,6 +9,7 @@ interface SessionControlsProps {
   hasVotes: boolean;
   currentDeckType: string;
   isModeratorOrVoter: boolean;
+  isModerator: boolean;
   onReveal: () => void;
   onClear: () => void;
   onSetDeck: (deckType: string, customValues?: string[]) => void;
@@ -23,6 +24,7 @@ export default function SessionControls({
   hasVotes,
   currentDeckType,
   isModeratorOrVoter,
+  isModerator,
   onReveal,
   onClear,
   onSetDeck,
@@ -96,11 +98,17 @@ export default function SessionControls({
 
       {isModeratorOrVoter && (
         <>
-          {/* Reveal / Clear */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* Reveal / Clear — blurred for non-moderators */}
+          <div className={`relative grid grid-cols-2 gap-2 ${!isModerator ? 'select-none' : ''}`}>
+            {!isModerator && (
+              <div className="absolute inset-0 z-10 rounded-lg backdrop-blur-[3px] bg-white/40 flex items-center justify-center">
+                <span className="text-xs font-semibold text-slate-400">Moderator only</span>
+              </div>
+            )}
             <motion.button
-              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-              onClick={onReveal}
+              whileHover={isModerator ? { scale: 1.02 } : undefined}
+              whileTap={isModerator ? { scale: 0.98 } : undefined}
+              onClick={isModerator ? onReveal : undefined}
               disabled={!hasVotes || isRevealed}
               className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 text-white text-sm font-semibold shadow-sm disabled:shadow-none transition-all"
             >
@@ -108,16 +116,17 @@ export default function SessionControls({
             </motion.button>
 
             <motion.button
-              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-              onClick={onClear}
+              whileHover={isModerator ? { scale: 1.02 } : undefined}
+              whileTap={isModerator ? { scale: 0.98 } : undefined}
+              onClick={isModerator ? onClear : undefined}
               className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-orange-500 to-rose-500 hover:from-orange-400 hover:to-rose-400 text-white text-sm font-semibold shadow-sm transition-all"
             >
               <Trash2 className="w-4 h-4" /><span>Clear</span>
             </motion.button>
           </div>
 
-          {/* Deck Selector */}
-          <div className="relative">
+          {/* Deck Selector — moderator only */}
+          {isModerator && <div className="relative">
             <button
               onClick={() => { setShowDeckMenu(!showDeckMenu); setPendingDeck(null); }}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-sm font-medium transition-colors"
@@ -210,7 +219,7 @@ export default function SessionControls({
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
+          </div>}
         </>
       )}
     </div>

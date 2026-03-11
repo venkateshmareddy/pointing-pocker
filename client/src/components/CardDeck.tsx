@@ -41,7 +41,7 @@ export default function CardDeck({ cards, selectedValue, isRevealed, onSelectCar
 
       <AnimatePresence mode="wait">
         <motion.div key={cards.join(',')} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-3">
+          <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-3 pb-6">
             {regularCards.map((card, i) => (
               <motion.div
                 key={`${card}-${clearCount}`}
