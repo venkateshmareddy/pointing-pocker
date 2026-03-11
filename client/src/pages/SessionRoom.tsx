@@ -114,8 +114,22 @@ export default function SessionRoom() {
   const handleReveal = useCallback(() => roomState.sendReveal(), [roomState]);
   const handleClear = useCallback(() => { sounds.playClear(); roomState.sendClear(); }, [sounds, roomState]);
 
+  // ── Connecting (waiting for initial server state) ────────────────────────────
+  if (!roomState.roomState) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center p-4 bg-slate-100">
+        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col items-center gap-3 text-slate-500"
+        >
+          <div className="w-8 h-8 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm font-medium">Connecting to room…</span>
+        </motion.div>
+      </div>
+    );
+  }
+
   // ── Join form ────────────────────────────────────────────────────────────────
-  if (!roomState.roomState || showJoinForm) {
+  if (showJoinForm) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center p-4 bg-slate-100">
         <motion.div
@@ -293,7 +307,7 @@ export default function SessionRoom() {
                 <SessionControls
                   roomId={roomId} isRevealed={currentRoom.revealed} hasVotes={hasVotes}
                   currentDeckType={currentRoom.deckType} isModeratorOrVoter={isModeratorOrVoter}
-                  isModerator={isModerator}
+                  isModerator={isModerator} teamGroups={currentRoom.teamGroups}
                   onReveal={handleReveal} onClear={handleClear} onSetDeck={roomState.sendSetDeck}
                 />
               </motion.div>

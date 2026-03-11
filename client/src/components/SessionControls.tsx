@@ -10,6 +10,7 @@ interface SessionControlsProps {
   currentDeckType: string;
   isModeratorOrVoter: boolean;
   isModerator: boolean;
+  teamGroups?: string[];
   onReveal: () => void;
   onClear: () => void;
   onSetDeck: (deckType: string, customValues?: string[]) => void;
@@ -25,6 +26,7 @@ export default function SessionControls({
   currentDeckType,
   isModeratorOrVoter,
   isModerator,
+  teamGroups,
   onReveal,
   onClear,
   onSetDeck,
@@ -36,10 +38,11 @@ export default function SessionControls({
   const [pendingDeck, setPendingDeck] = useState<string | null>(null);
 
   const handleCopyLink = useCallback(() => {
-    navigator.clipboard.writeText(`${window.location.origin}/room/${roomId}`);
+    const teamsParam = teamGroups?.length ? `?teams=${teamGroups.join(',')}` : '';
+    navigator.clipboard.writeText(`${window.location.origin}/room/${roomId}${teamsParam}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }, [roomId]);
+  }, [roomId, teamGroups]);
 
   const handleSelectDeck = (key: string) => {
     if (key === 'custom') {
