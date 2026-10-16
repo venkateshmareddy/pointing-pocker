@@ -1,11 +1,14 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, Clock, Crown, Eye } from 'lucide-react';
+import { Check, Clock, Crown, Eye, UserRoundX } from 'lucide-react';
 import type { Participant } from '@pointing-poker/shared/types';
 
 interface ParticipantListProps {
   participants: Participant[];
   isRevealed: boolean;
   teamGroups?: string[];
+  isModerator?: boolean;
+  myId?: string | null;
+  onKick?: (participantId: string) => void;
 }
 
 const TEAM_COLORS = [
@@ -44,7 +47,7 @@ function getInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-function VoterRow({ participant, idx, isRevealed }: { participant: Participant; idx: number; isRevealed: boolean }) {
+function VoterRow({ participant, idx, isRevealed, canKick, onKick }: { participant: Participant; idx: number; isRevealed: boolean; canKick?: boolean; onKick?: (id: string) => void }) {
   return (
     <motion.div
       key={participant.id}
@@ -70,6 +73,11 @@ function VoterRow({ participant, idx, isRevealed }: { participant: Participant; 
       <div className="flex-1 min-w-0 text-sm font-medium text-slate-800 truncate">
         {participant.displayName}
       </div>
+      {canKick && (
+        <button onClick={() => onKick?.(participant.id)} className="p-1 text-slate-300 hover:text-rose-500 transition-colors" title={`Remove ${participant.displayName}`}>
+          <UserRoundX className="w-3.5 h-3.5" />
+        </button>
+      )}
 
       {isRevealed ? (
         <motion.div
@@ -97,7 +105,7 @@ function VoterRow({ participant, idx, isRevealed }: { participant: Participant; 
   );
 }
 
-export default function ParticipantList({ participants, isRevealed, teamGroups }: ParticipantListProps) {
+export default function ParticipantList({ participants, isRevealed, teamGroups, isModerator, myId, onKick }: ParticipantListProps) {
   const voters = participants.filter((p) => p.role !== 'spectator');
   const spectators = participants.filter((p) => p.role === 'spectator');
   const votedCount = voters.filter((p) => p.hasVoted).length;
@@ -151,7 +159,7 @@ export default function ParticipantList({ participants, isRevealed, teamGroups }
                       <div className="px-2.5 py-1.5 text-xs text-slate-400 italic">No members yet</div>
                     ) : (
                       teamVoters.map((participant, idx) => (
-                        <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} />
+                        <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} canKick={isModerator && participant.id !== myId} onKick={onKick} />
                       ))
                     )}
                   </div>
@@ -159,60 +167,12 @@ export default function ParticipantList({ participants, isRevealed, teamGroups }
               })}
               {/* Participants without a team assignment */}
               {voters.filter((p) => !p.team || !teamGroups.includes(p.team)).map((participant, idx) => (
-                <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} />
+                <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} canKick={isModerator && participant.id !== myId} onKick={onKick} />
               ))}
             </>
-          ) : (
-          voters.map((participant, idx) => (
-            <motion.div
-              key={participant.id}
-              initial={{ opacity: 0, x: -12 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -12 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 22 }}
-              className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <div className="relative shrink-0">
-                <div
-                  className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(participant.displayName)} flex items-center justify-center text-white text-[11px] font-bold shadow-sm`}
-                >
-                  {getInitials(participant.displayName)}
-                </div>
-                {participant.role === 'moderator' && (
-                  <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-400 flex items-center justify-center shadow-sm">
-                    <Crown className="w-2.5 h-2.5 text-white" />
-                  </div>
-                )}
-              </div>
-
-              <div className="flex-1 min-w-0 text-sm font-medium text-slate-800 truncate">
-                {participant.displayName}
-              </div>
-
-              {isRevealed ? (
-                <motion.div
-                  initial={{ rotateY: 90, opacity: 0, scale: 0.5 }}
-                  animate={{ rotateY: 0, opacity: 1, scale: 1 }}
-                  transition={{ type: 'spring', stiffness: 300, damping: 20, delay: idx * 0.08 }}
-                  className="min-w-[32px] h-7 flex items-center justify-center rounded-lg bg-indigo-100 border border-indigo-200 text-sm font-bold text-indigo-700 px-2"
-                >
-                  {participant.vote ?? '—'}
-                </motion.div>
-              ) : participant.hasVoted ? (
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  className="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center"
-                >
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                </motion.div>
-              ) : (
-                <div className="w-7 h-7 rounded-full bg-amber-50 flex items-center justify-center">
-                  <Clock className="w-3.5 h-3.5 text-amber-500 animate-gentle-pulse" />
-                </div>
-              )}
-            </motion.div>
-          )))}
+          ) : voters.map((participant, idx) => (
+            <VoterRow key={participant.id} participant={participant} idx={idx} isRevealed={isRevealed} canKick={isModerator && participant.id !== myId} onKick={onKick} />
+          ))}
 
           {spectators.map((participant) => (
             <motion.div
@@ -231,6 +191,11 @@ export default function ParticipantList({ participants, isRevealed, teamGroups }
                 {participant.displayName}
               </div>
               <Eye className="w-4 h-4 text-slate-400 shrink-0" />
+              {isModerator && participant.id !== myId && (
+                <button onClick={() => onKick?.(participant.id)} className="p-1 text-slate-400 hover:text-rose-500 transition-colors" title={`Remove ${participant.displayName}`}>
+                  <UserRoundX className="w-3.5 h-3.5" />
+                </button>
+              )}
             </motion.div>
           ))}
         </AnimatePresence>

@@ -172,7 +172,7 @@ PartyKit Server (Cloudflare Edge)
 Other Participants' Browsers
 ```
 
-State is held entirely in memory inside Cloudflare Durable Objects. No external database needed. Rooms are garbage-collected automatically when all participants leave.
+Room configuration is persisted in PartyKit's per-room Durable Object storage, while live participant connections and votes remain transient. Timers use Durable Object alarms, so their deadlines survive an instance restart. No external database is required.
 
 ---
 

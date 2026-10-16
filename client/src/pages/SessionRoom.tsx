@@ -7,7 +7,7 @@ import { usePartySocket } from '@/hooks/usePartySocket';
 import { useRoomState } from '@/hooks/useRoomState';
 import { useSounds } from '@/hooks/useSounds';
 import { useRoundHistory } from '@/hooks/useRoundHistory';
-import { getAllCards } from '@/lib/decks';
+import { getAllCards, parseCustomDeck } from '@/lib/decks';
 
 import CardDeck from '@/components/CardDeck';
 import ParticipantList from '@/components/ParticipantList';
@@ -47,6 +47,7 @@ export default function SessionRoom() {
   const [showRevealFlash, setShowRevealFlash] = useState(false);
   const [joinTeam, setJoinTeam] = useState('');
   const hasSetTeamsRef = useRef(false);
+  const hasSetInitialDeckRef = useRef(false);
 
   const prevRevealedRef = useRef(false);
   const prevParticipantCountRef = useRef(0);
@@ -98,6 +99,21 @@ export default function SessionRoom() {
       roomState.sendSetTeams(teamsFromUrl);
     }
   }, [roomState.roomState, roomState.myId, teamsFromUrl, roomState.sendSetTeams]);
+
+  // Apply the deck selected by the room creator after they become moderator.
+  useEffect(() => {
+    if (hasSetInitialDeckRef.current || !roomState.roomState || !roomState.myId) return;
+    if (roomState.myId !== roomState.roomState.room.moderatorId) return;
+
+    const deckType = searchParams.get('deck');
+    if (!deckType) return;
+
+    const customValues = deckType === 'custom'
+      ? parseCustomDeck(searchParams.get('customDeck') ?? '')
+      : undefined;
+    hasSetInitialDeckRef.current = true;
+    roomState.sendSetDeck(deckType, customValues);
+  }, [roomState.roomState, roomState.myId, roomState.sendSetDeck, searchParams]);
 
   const handleJoin = useCallback(() => {
     if (!joinDisplayName.trim()) { setJoinError('Please enter your name'); return; }
@@ -243,7 +259,7 @@ export default function SessionRoom() {
             <Timer
               timerSeconds={currentRoom.timerSeconds}
               timerStartedAt={currentRoom.timerStartedAt}
-              isModeratorOrVoter={isModeratorOrVoter}
+              isModeratorOrVoter={isModerator}
               onStartTimer={roomState.sendStartTimer}
               onStopTimer={roomState.sendStopTimer}
             />
@@ -301,7 +317,7 @@ export default function SessionRoom() {
             {/* Right sidebar */}
             <div className="space-y-4">
               <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
-                <ParticipantList participants={roomState.participants} isRevealed={currentRoom.revealed} teamGroups={currentRoom.teamGroups} />
+                <ParticipantList participants={roomState.participants} isRevealed={currentRoom.revealed} teamGroups={currentRoom.teamGroups} isModerator={isModerator} myId={roomState.myId} onKick={roomState.sendKick} />
               </motion.div>
               <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 }}>
                 <SessionControls

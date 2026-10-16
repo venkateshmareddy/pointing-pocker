@@ -9,7 +9,7 @@ export default function Landing() {
   const navigate = useNavigate();
   const [showCreateModal, setShowCreateModal] = useState<boolean | null>(null);
   const [displayName, setDisplayName] = useState('');
-  const [selectedDeck, setSelectedDeck] = useState('fibonacci');
+  const [selectedDeck, setSelectedDeck] = useState('powers-of-2');
   const [customDeckInput, setCustomDeckInput] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
@@ -32,10 +32,15 @@ export default function Landing() {
     const roomId = generateRoomCode();
     localStorage.setItem('displayName', displayName);
     localStorage.setItem('selectedDeck', selectedDeck);
-    const teamsParam = teamMode
-      ? '?teams=' + teamNames.map((t) => t.trim()).filter(Boolean).join(',')
-      : '';
-    navigate(`/room/${roomId}${teamsParam}`);
+    const params = new URLSearchParams();
+    params.set('deck', selectedDeck);
+    if (selectedDeck === 'custom') {
+      params.set('customDeck', parseCustomDeck(customDeckInput).join(','));
+    }
+    if (teamMode) {
+      params.set('teams', teamNames.map((t) => t.trim()).filter(Boolean).join(','));
+    }
+    navigate(`/room/${roomId}?${params.toString()}`);
   }, [displayName, selectedDeck, customDeckInput, teamMode, teamNames, navigate]);
 
   const handleJoin = useCallback(() => {
@@ -110,7 +115,7 @@ export default function Landing() {
         >
           <motion.button
             whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-            onClick={() => { setShowCreateModal(true); setError(''); setDisplayName(''); setTeamMode(false); setTeamNames(['Dev', 'QA']); }}
+            onClick={() => { setShowCreateModal(true); setError(''); setDisplayName(''); setSelectedDeck('powers-of-2'); setTeamMode(false); setTeamNames(['Dev', 'QA']); }}
             className="px-8 py-3.5 rounded-xl text-white font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 shadow-lg shadow-indigo-500/30 flex items-center justify-center gap-2 transition-all"
           >
             <Zap className="w-5 h-5" />

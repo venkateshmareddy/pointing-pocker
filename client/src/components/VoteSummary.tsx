@@ -247,6 +247,19 @@ export default function VoteSummary({ participants, isRevealed, teamGroups }: Vo
     );
   }
 
+  const teamAverages = teamGroups.map((team) => {
+    const votes = Object.fromEntries(
+      Object.entries(participants)
+        .filter(([, participant]) => participant.team === team)
+        .map(([id, participant]) => [id, participant.vote]),
+    );
+    return calculateStats(votes).average;
+  });
+  const teamsWithAverages = teamAverages.filter((average): average is number => average !== null);
+  const teamAverageTotal = Math.round(
+    teamsWithAverages.reduce((total, average) => total + average, 0) * 100,
+  ) / 100;
+
   // ── Team mode: team cards side-by-side + combined at bottom ────────────
   return (
     <div className="space-y-3">
@@ -330,6 +343,23 @@ export default function VoteSummary({ participants, isRevealed, teamGroups }: Vo
           );
         })}
       </div>
+
+      {teamsWithAverages.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: teamGroups.length * 0.08 }}
+          className="rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50 to-violet-50 px-5 py-4 shadow-sm flex items-center justify-between gap-4"
+        >
+          <div>
+            <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">Sum of team averages</div>
+            <div className="text-xs text-slate-500 mt-1">{teamGroups.join(' + ')}</div>
+          </div>
+          <div className="text-3xl font-black text-indigo-700">
+            <AnimatedNumber value={teamAverageTotal} />
+          </div>
+        </motion.div>
+      )}
 
       {/* Combined card */}
       <motion.div

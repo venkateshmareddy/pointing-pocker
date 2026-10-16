@@ -35,6 +35,9 @@ export function usePartySocket(roomId: string): UsePartySockeReturn {
       try {
         const message = JSON.parse(event.data) as ServerMessage;
         setLastMessage(message);
+        if (message.type === 'kicked') {
+          socket.close();
+        }
       } catch (error) {
         console.error('Failed to parse message:', error);
       }

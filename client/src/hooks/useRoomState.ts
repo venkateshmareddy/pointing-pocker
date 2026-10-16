@@ -16,6 +16,7 @@ export interface RoomStateHook {
   sendJoin: (displayName: string, role: 'voter' | 'spectator', team?: string) => void;
   sendSetDeck: (deckType: string, customValues?: string[]) => void;
   sendSetTeams: (teams: string[]) => void;
+  sendKick: (participantId: string) => void;
   error: string | null;
 }
 
@@ -60,6 +61,7 @@ export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
 
     switch (message.type) {
       case 'state':
+        setError(null);
         setMyId(message.yourId);
         setRoomState(message.state);
         break;
@@ -113,6 +115,7 @@ export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
         break;
 
       case 'votes-cleared':
+        setError(null);
         setRoomState((prev) => {
           if (!prev) return null;
           return {
@@ -130,13 +133,24 @@ export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
         break;
 
       case 'story-updated':
+        setError(null);
         setRoomState((prev) => {
           if (!prev) return null;
-          return { ...prev, room: { ...prev.room, currentStory: message.title } };
+          return {
+            ...prev,
+            room: { ...prev.room, currentStory: message.title, revealed: false },
+            participants: Object.fromEntries(
+              Object.entries(prev.participants).map(([id, participant]) => [
+                id,
+                { ...participant, vote: null, hasVoted: false },
+              ]),
+            ),
+          };
         });
         break;
 
       case 'deck-updated':
+        setError(null);
         setRoomState((prev) => {
           if (!prev) return null;
           return { ...prev, room: { ...prev.room, deckType: message.deckType, customDeck: message.customValues } };
@@ -225,6 +239,10 @@ export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
     (teams: string[]) => { sendMessage({ type: 'set-teams', teams }); },
     [sendMessage],
   );
+  const sendKick = useCallback(
+    (participantId: string) => { sendMessage({ type: 'kick', participantId }); },
+    [sendMessage],
+  );
 
   const participants = roomState ? Object.values(roomState.participants) : [];
   const isRevealed = roomState?.room.revealed ?? false;
@@ -232,7 +250,7 @@ export function useRoomState(partySocket: UsePartySockeReturn): RoomStateHook {
   return {
     roomState, participants, myId, isRevealed,
     sendVote, sendReveal, sendClear, sendSetStory,
-    sendStartTimer, sendStopTimer, sendJoin, sendSetDeck, sendSetTeams,
+    sendStartTimer, sendStopTimer, sendJoin, sendSetDeck, sendSetTeams, sendKick,
     error,
   };
 }
