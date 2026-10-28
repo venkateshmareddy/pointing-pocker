@@ -2,7 +2,7 @@
 
 A free, real-time Planning Poker app for agile teams. No login required. No ads. No cost.
 
-Built with **React + TypeScript + PartyKit (Cloudflare WebSockets) + Vercel**.
+Built with **React + TypeScript + PartyServer (Cloudflare Durable Objects) + Vercel**.
 
 ---
 
@@ -25,12 +25,12 @@ No sign-up. Works on mobile. Zero latency via Cloudflare edge.
 |---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS v4 |
 | Animations | Framer Motion |
-| Real-time | PartyKit (Cloudflare Durable Objects) |
+| Real-time | PartyServer (Cloudflare Durable Objects) |
 | WebSocket client | PartySocket (auto-reconnect) |
 | Routing | React Router v6 |
 | Icons | Lucide React |
 | Hosting (frontend) | Vercel |
-| Hosting (backend) | PartyKit Cloud |
+| Hosting (backend) | Cloudflare Workers |
 
 ---
 
@@ -51,10 +51,10 @@ pointing-pocker-project/
 │   ├── vite.config.ts
 │   └── package.json
 │
-├── server/               # PartyKit WebSocket server
+├── server/               # PartyServer WebSocket server (Cloudflare Worker)
 │   ├── src/
 │   │   └── index.ts      # Room logic, message routing
-│   ├── partykit.json     # PartyKit project config
+│   ├── wrangler.jsonc    # Cloudflare Workers config
 │   └── package.json
 │
 ├── shared/               # Shared types (@pointing-poker/shared)
@@ -62,7 +62,8 @@ pointing-pocker-project/
 │   └── package.json
 │
 ├── docs/
-│   └── DEPLOYMENT.md     # Full deployment and configuration guide
+│   ├── GETTING_BACK_ONLINE.md  # Beginner: restore after PartyKit shutdown
+│   └── DEPLOYMENT.md           # Full deployment and configuration guide
 └── README.md
 ```
 
@@ -117,7 +118,7 @@ This installs all workspaces (client, server, shared) at once.
 npm run dev
 ```
 
-This single command starts **both** the Vite client (`http://localhost:5173`) and the PartyKit server (`http://localhost:1999`) in parallel, with color-coded output.
+This single command starts **both** the Vite client (`http://localhost:5173`) and the PartyServer worker (`http://localhost:1999`) in parallel, with color-coded output.
 
 ### 3. Open the app
 
@@ -133,23 +134,19 @@ Visit [http://localhost:5173](http://localhost:5173) — create a session and st
 VITE_PARTYKIT_HOST=127.0.0.1:1999
 ```
 
-For production this is set to your deployed PartyKit host (e.g. `pointing-poker.your-username.partykit.dev`).
+For production this is set to your deployed Cloudflare Workers host (e.g. `pointing-poker.your-subdomain.workers.dev`).
 
 ### Server
 
-No environment variables required. PartyKit manages runtime config via `partykit.json`.
+No environment variables required. Cloudflare Workers config lives in `server/wrangler.jsonc`.
 
 ---
 
 ## Deployment
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the complete step-by-step guide covering:
+**New here / site stuck on “Connecting…”?** Start with [docs/GETTING_BACK_ONLINE.md](docs/GETTING_BACK_ONLINE.md).
 
-- PartyKit server deployment
-- Vercel frontend deployment
-- Custom domain setup (with DNS configuration)
-- Environment variable configuration
-- Connecting frontend to production backend
+Full guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Cloudflare Workers backend, Vercel frontend, env vars, custom domains.
 
 ---
 
@@ -160,7 +157,7 @@ Browser (React App)
        │
        │  WebSocket (PartySocket)
        ▼
-PartyKit Server (Cloudflare Edge)
+PartyServer (Cloudflare Worker)
   ┌────────────────────────────┐
   │  Durable Object per room   │
   │  - stores room state       │
@@ -172,7 +169,7 @@ PartyKit Server (Cloudflare Edge)
 Other Participants' Browsers
 ```
 
-Room configuration is persisted in PartyKit's per-room Durable Object storage, while live participant connections and votes remain transient. Timers use Durable Object alarms, so their deadlines survive an instance restart. No external database is required.
+Room configuration is persisted in each room’s Durable Object storage, while live participant connections and votes remain transient. Timers use Durable Object alarms, so their deadlines survive an instance restart. No external database is required.
 
 ---
 
@@ -180,9 +177,9 @@ Room configuration is persisted in PartyKit's per-room Durable Object storage, w
 
 | Service | Limit | Estimated Usage (80 sessions/month) |
 |---|---|---|
-| PartyKit / Cloudflare Workers | 100,000 req/day | ~8,000/day (8%) |
+| Cloudflare Workers | Free plan limits | Well within typical use |
 | Vercel bandwidth | 100 GB/month | ~640 MB (<1%) |
-| Durable Object storage | 5 GB | ~10-20 MB (<1%) |
+| Durable Object storage | Free plan included | ~10-20 MB typical |
 
 **Total monthly cost: $0**
 
@@ -196,13 +193,13 @@ All commands run from the **project root**:
 |---|---|
 | `npm run dev` | Start both client (:5173) and server (:1999) in parallel |
 | `npm run build` | Production build of client |
-| `npm run deploy` | Deploy server to PartyKit + build client |
-| `npm run deploy:server` | Deploy PartyKit server only |
+| `npm run deploy` | Deploy server to Cloudflare + build client |
+| `npm run deploy:server` | Deploy PartyServer worker only |
 | `npm run deploy:client` | Build client only |
 | `npm run preview` | Serve production build locally |
 | `npm run clean` | Remove all node_modules and dist |
 | `npm run dev -w client` | Start only Vite dev server |
-| `npm run dev -w server` | Start only PartyKit dev server |
+| `npm run dev -w server` | Start only PartyServer (`wrangler dev`) |
 
 ---
 

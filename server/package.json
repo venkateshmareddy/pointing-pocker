@@ -3,14 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "npx partykit dev --port 1999",
-    "deploy": "npx partykit deploy"
+    "dev": "npx wrangler dev --port 1999",
+    "deploy": "npx wrangler deploy"
   },
   "dependencies": {
     "@pointing-poker/shared": "*",
-    "partykit": "^0.0.108"
+    "partyserver": "^0.5.10"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "@cloudflare/workers-types": "^5.20261028.1",
+    "typescript": "^5.4.0",
+    "wrangler": "^4.154.0"
   }
 }

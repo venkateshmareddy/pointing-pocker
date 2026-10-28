@@ -16,7 +16,8 @@
     "deploy:server": "npm run deploy -w server",
     "deploy:client": "npm run build -w client",
     "preview": "npm run preview -w client",
-    "clean": "rm -rf node_modules client/node_modules server/node_modules client/dist"
+    "clean": "rm -rf node_modules client/node_modules server/node_modules client/dist",
+    "login:cf": "npm exec -w pointing-poker-server -- wrangler login"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

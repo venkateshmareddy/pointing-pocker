@@ -1,7 +1,9 @@
-import type * as Party from "partykit/server";
+import { Server, routePartykitRequest, type Connection, type ConnectionContext, type WSMessage } from "partyserver";
 import type { ClientMessage, ServerMessage, RoomState, Participant, FullRoomState, DeckType } from "@pointing-poker/shared/types";
 
 type ConnectionState = { participantId?: string; kicked?: boolean };
+type Env = { Main: DurableObjectNamespace<PointingPokerServer> };
+
 const ROOM_STATE_KEY = "room-state";
 const DECK_TYPES: DeckType[] = ["fibonacci", "modified-fibonacci", "tshirt", "powers-of-2", "custom"];
 const STANDARD_DECKS: Record<Exclude<DeckType, "custom">, Array<string | number>> = {
@@ -30,27 +32,39 @@ function isClientMessage(value: unknown): value is ClientMessage {
   return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
 }
 
-export default class PointingPokerServer implements Party.Server {
+export class PointingPokerServer extends Server<Env> {
   static options = { hibernate: false };
   private participants = new Map<string, Participant>();
   private connectionMap = new Map<string, string>();
   private reverseConnectionMap = new Map<string, Set<string>>();
   private previousParticipants = new Map<string, Participant>();
   private kickedParticipantIds = new Set<string>();
-  private roomState: RoomState;
-
-  constructor(readonly room: Party.Room) { this.roomState = this.defaultRoomState(); }
+  private roomState: RoomState = {
+    sessionId: "",
+    createdAt: new Date().toISOString(),
+    moderatorId: "",
+    deckType: "powers-of-2",
+    currentStory: "",
+    revealed: false,
+    timerSeconds: null,
+    timerStartedAt: null,
+    settings: { allowSpectators: true, autoRevealWhenAllVoted: false, showAverage: true },
+  };
 
   async onStart() {
-    const stored = await this.room.storage.get<RoomState>(ROOM_STATE_KEY);
+    const stored = await this.ctx.storage.get<RoomState>(ROOM_STATE_KEY);
     if (stored) this.roomState = stored;
+    else {
+      this.roomState = this.defaultRoomState();
+      await this.persistRoomState();
+    }
     if (this.roomState.timerSeconds && this.roomState.timerStartedAt) {
       const endsAt = Date.parse(this.roomState.timerStartedAt) + this.roomState.timerSeconds * 1000;
       if (endsAt <= Date.now()) {
         this.roomState.timerSeconds = null;
         this.roomState.timerStartedAt = null;
         await this.persistRoomState();
-      } else await this.room.storage.setAlarm(endsAt);
+      } else await this.ctx.storage.setAlarm(endsAt);
     }
   }
 
@@ -58,10 +72,10 @@ export default class PointingPokerServer implements Party.Server {
     this.roomState.timerSeconds = null;
     this.roomState.timerStartedAt = null;
     await this.persistRoomState();
-    this.broadcast({ type: "timer-stopped" });
+    this.broadcastMessage({ type: "timer-stopped" });
   }
 
-  async onRequest(request: Party.Request): Promise<Response> {
+  async onRequest(request: Request): Promise<Response> {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const voters = [...this.participants.values()].filter((p) => p.role !== "spectator");
     const spectators = [...this.participants.values()].filter((p) => p.role === "spectator");
@@ -71,7 +85,7 @@ export default class PointingPokerServer implements Party.Server {
       min: Math.min(...numericVotes), max: Math.max(...numericVotes), consensus: new Set(numericVotes).size === 1,
     } : { average: null, min: null, max: null, consensus: false };
     return Response.json({
-      roomId: this.room.id, revealed: this.roomState.revealed,
+      roomId: this.name, revealed: this.roomState.revealed,
       currentStory: this.roomState.currentStory, deckType: this.roomState.deckType,
       voters: voters.map((p) => ({ participantId: p.id, displayName: p.displayName, role: p.role, hasVoted: p.hasVoted, vote: this.roomState.revealed ? p.vote : p.hasVoted ? "hidden" : null })),
       spectators: spectators.map((p) => ({ participantId: p.id, displayName: p.displayName })),
@@ -79,11 +93,11 @@ export default class PointingPokerServer implements Party.Server {
     }, { headers: { "Access-Control-Allow-Origin": "*" } });
   }
 
-  async onConnect(connection: Party.Connection<ConnectionState>) {
+  async onConnect(connection: Connection<ConnectionState>, _ctx: ConnectionContext) {
     connection.send(JSON.stringify({ type: "state", state: this.getFullState(), yourId: connection.id } satisfies ServerMessage));
   }
 
-  async onMessage(message: string | ArrayBuffer | ArrayBufferView, sender: Party.Connection<ConnectionState>) {
+  async onMessage(sender: Connection<ConnectionState>, message: WSMessage) {
     if (typeof message !== "string") return this.sendError(sender.id, "Only JSON text messages are supported");
     try {
       const parsed: unknown = JSON.parse(message);
@@ -105,7 +119,7 @@ export default class PointingPokerServer implements Party.Server {
     } catch { this.sendError(sender.id, "Failed to process message"); }
   }
 
-  async onClose(connection: Party.Connection<ConnectionState>) {
+  async onClose(connection: Connection<ConnectionState>) {
     const participantId = this.connectionMap.get(connection.id) ?? connection.state?.participantId;
     this.connectionMap.delete(connection.id);
     if (!participantId) return;
@@ -123,13 +137,13 @@ export default class PointingPokerServer implements Party.Server {
         replacement.role = "moderator";
         this.roomState.moderatorId = replacement.id;
         await this.persistRoomState();
-        this.broadcast({ type: "moderator-changed", newModeratorId: replacement.id });
+        this.broadcastMessage({ type: "moderator-changed", newModeratorId: replacement.id });
       }
     }
-    this.broadcast({ type: "participant-left", id: participantId });
+    this.broadcastMessage({ type: "participant-left", id: participantId });
   }
 
-  private async handleJoin(connection: Party.Connection<ConnectionState>, data: Extract<ClientMessage, { type: "join" }>) {
+  private async handleJoin(connection: Connection<ConnectionState>, data: Extract<ClientMessage, { type: "join" }>) {
     const displayName = cleanText(data.displayName, 60);
     if (!displayName || !isRole(data.role)) return this.sendError(connection.id, "Invalid name or role");
     if (data.role === "spectator" && !this.roomState.settings.allowSpectators) return this.sendError(connection.id, "Spectators are not allowed");
@@ -171,8 +185,8 @@ export default class PointingPokerServer implements Party.Server {
       await this.persistRoomState();
     }
     this.participants.set(participantId, participant);
-    this.broadcast({ type: "participant-joined", participant });
-    if (participant.role === "moderator") this.broadcast({ type: "moderator-changed", newModeratorId: participantId });
+    this.broadcastMessage({ type: "participant-joined", participant });
+    if (participant.role === "moderator") this.broadcastMessage({ type: "moderator-changed", newModeratorId: participantId });
     connection.send(JSON.stringify({ type: "state", state: this.getFullState(), yourId: participantId } satisfies ServerMessage));
   }
 
@@ -183,7 +197,7 @@ export default class PointingPokerServer implements Party.Server {
     if (!this.isAllowedVote(value)) return this.sendError(connectionId, "That card is not in the current deck");
     participant.vote = value;
     participant.hasVoted = true;
-    this.broadcast({ type: "vote-cast", id: participant.id });
+    this.broadcastMessage({ type: "vote-cast", id: participant.id });
     if (this.roomState.settings.autoRevealWhenAllVoted) {
       const voters = [...this.participants.values()].filter((p) => p.role !== "spectator");
       if (voters.length && voters.every((p) => p.hasVoted)) void this.revealVotes();
@@ -196,13 +210,13 @@ export default class PointingPokerServer implements Party.Server {
   }
   private async handleClear(id: string) {
     if (!this.isModerator(id)) return this.sendError(id, "Only moderator can clear votes");
-    await this.stopTimerInternal(); this.resetVotes(); this.broadcast({ type: "votes-cleared" });
+    await this.stopTimerInternal(); this.resetVotes(); this.broadcastMessage({ type: "votes-cleared" });
   }
   private async handleSetStory(id: string, value: unknown) {
     if (!this.isModerator(id)) return this.sendError(id, "Only moderator can set story");
     if (typeof value !== "string" || value.length > 500) return this.sendError(id, "Story title is too long");
     await this.stopTimerInternal(); this.roomState.currentStory = value.trim(); this.resetVotes();
-    await this.persistRoomState(); this.broadcast({ type: "story-updated", title: this.roomState.currentStory });
+    await this.persistRoomState(); this.broadcastMessage({ type: "story-updated", title: this.roomState.currentStory });
   }
   private async handleSetDeck(id: string, value: unknown, customValues?: unknown) {
     if (!this.isModerator(id)) return this.sendError(id, "Only moderator can set deck");
@@ -211,16 +225,16 @@ export default class PointingPokerServer implements Party.Server {
     if ((value === "custom" || customValues !== undefined) && !custom) return this.sendError(id, "Invalid custom deck");
     this.roomState.deckType = value; this.roomState.customDeck = custom ?? undefined; this.resetVotes();
     await this.persistRoomState();
-    this.broadcast({ type: "deck-updated", deckType: value, customValues: custom ?? undefined });
-    this.broadcast({ type: "votes-cleared" });
+    this.broadcastMessage({ type: "deck-updated", deckType: value, customValues: custom ?? undefined });
+    this.broadcastMessage({ type: "votes-cleared" });
   }
   private async handleStartTimer(id: string, value: unknown) {
     if (!this.isModerator(id)) return this.sendError(id, "Only moderator can start timer");
     if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 3600) return this.sendError(id, "Timer must be between 1 second and 1 hour");
     const seconds = value as number, startedAt = new Date().toISOString();
     this.roomState.timerSeconds = seconds; this.roomState.timerStartedAt = startedAt;
-    await this.persistRoomState(); await this.room.storage.setAlarm(Date.now() + seconds * 1000);
-    this.broadcast({ type: "timer-started", seconds, startedAt });
+    await this.persistRoomState(); await this.ctx.storage.setAlarm(Date.now() + seconds * 1000);
+    this.broadcastMessage({ type: "timer-started", seconds, startedAt });
   }
   private async handleStopTimer(id: string) {
     if (!this.isModerator(id)) return this.sendError(id, "Only moderator can stop timer");
@@ -232,26 +246,26 @@ export default class PointingPokerServer implements Party.Server {
     const teams = value.map((team) => cleanText(team, 40));
     if (teams.some((team) => !team) || new Set(teams).size !== teams.length) return this.sendError(id, "Team names must be unique");
     this.roomState.teamGroups = teams.length ? teams as string[] : undefined;
-    await this.persistRoomState(); this.broadcast({ type: "teams-updated", teams: teams as string[] });
+    await this.persistRoomState(); this.broadcastMessage({ type: "teams-updated", teams: teams as string[] });
   }
   private handleKick(id: string, targetValue: unknown) {
     if (!this.isModerator(id)) return this.sendError(id, "Only moderator can kick participants");
     if (typeof targetValue !== "string" || targetValue === this.getParticipantId(id) || !this.participants.has(targetValue)) return this.sendError(id, "Invalid kick target");
     this.kickedParticipantIds.add(targetValue); this.previousParticipants.delete(targetValue);
     for (const connectionId of this.reverseConnectionMap.get(targetValue) ?? []) {
-      const target = this.room.getConnection<ConnectionState>(connectionId);
+      const target = this.getConnection(connectionId) as Connection<ConnectionState> | undefined;
       if (target) { target.setState({ participantId: targetValue, kicked: true }); target.send(JSON.stringify({ type: "kicked" } satisfies ServerMessage)); target.close(4001, "Kicked by moderator"); }
     }
   }
 
   private async stopTimerInternal() {
     const running = this.roomState.timerSeconds !== null || this.roomState.timerStartedAt !== null;
-    await this.room.storage.deleteAlarm(); this.roomState.timerSeconds = null; this.roomState.timerStartedAt = null;
-    if (running) { await this.persistRoomState(); this.broadcast({ type: "timer-stopped" }); }
+    await this.ctx.storage.deleteAlarm(); this.roomState.timerSeconds = null; this.roomState.timerStartedAt = null;
+    if (running) { await this.persistRoomState(); this.broadcastMessage({ type: "timer-stopped" }); }
   }
   private async revealVotes() {
     await this.stopTimerInternal(); this.roomState.revealed = true; await this.persistRoomState();
-    this.broadcast({ type: "votes-revealed", votes: Object.fromEntries([...this.participants].map(([id, p]) => [id, p.vote])) });
+    this.broadcastMessage({ type: "votes-revealed", votes: Object.fromEntries([...this.participants].map(([id, p]) => [id, p.vote])) });
   }
   private resetVotes() { for (const p of this.participants.values()) { p.vote = null; p.hasVoted = false; } this.roomState.revealed = false; }
   private isAllowedVote(value: unknown): value is string | number {
@@ -268,11 +282,20 @@ export default class PointingPokerServer implements Party.Server {
   private getParticipantId(id: string) { return this.connectionMap.get(id) ?? id; }
   private getParticipant(id: string) { return this.participants.get(this.getParticipantId(id)); }
   private isModerator(id: string) { return this.getParticipant(id)?.role === "moderator"; }
-  private sendError(id: string, message: string) { this.room.getConnection(id)?.send(JSON.stringify({ type: "error", message } satisfies ServerMessage)); }
-  private broadcast(message: ServerMessage) { this.room.broadcast(JSON.stringify(message)); }
-  private async persistRoomState() { await this.room.storage.put(ROOM_STATE_KEY, this.roomState); }
+  private sendError(id: string, message: string) { this.getConnection(id)?.send(JSON.stringify({ type: "error", message } satisfies ServerMessage)); }
+  private broadcastMessage(message: ServerMessage) { this.broadcast(JSON.stringify(message)); }
+  private async persistRoomState() { await this.ctx.storage.put(ROOM_STATE_KEY, this.roomState); }
   private getFullState(): FullRoomState { return { room: { ...this.roomState }, participants: Object.fromEntries(this.participants) }; }
   private defaultRoomState(): RoomState {
-    return { sessionId: this.room.id, createdAt: new Date().toISOString(), moderatorId: "", deckType: "powers-of-2", currentStory: "", revealed: false, timerSeconds: null, timerStartedAt: null, settings: { allowSpectators: true, autoRevealWhenAllVoted: false, showAverage: true } };
+    return { sessionId: this.name, createdAt: new Date().toISOString(), moderatorId: "", deckType: "powers-of-2", currentStory: "", revealed: false, timerSeconds: null, timerStartedAt: null, settings: { allowSpectators: true, autoRevealWhenAllVoted: false, showAverage: true } };
   }
 }
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    return (
+      (await routePartykitRequest(request, env)) ||
+      new Response("Not Found", { status: 404 })
+    );
+  },
+} satisfies ExportedHandler<Env>;

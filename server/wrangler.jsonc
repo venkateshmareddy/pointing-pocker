@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pointing-poker",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Binding name "Main" → clients keep using /parties/main/<room>
+  "durable_objects": {
+    "bindings": [
+      { "name": "Main", "class_name": "PointingPokerServer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PointingPokerServer"] }
+  ]
+}
